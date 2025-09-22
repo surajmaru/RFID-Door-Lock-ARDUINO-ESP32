@@ -1,0 +1,105 @@
+#include <SPI.h>
+#include <MFRC522.h>
+
+// ---------------- RFID ----------------
+#define RST_PIN 9
+#define SS_PIN 10
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+// Replace with your card UID
+const byte allowedUID[] = {0x03, 0x9D, 0x21, 0x2D};
+
+// ---------------- MOTOR ----------------
+#define ENA 5   // PWM
+#define IN1 6
+#define IN2 7
+
+unsigned long lastTap = 0;
+const unsigned long debounce = 1500; // ignore taps within 1.5s
+
+bool motorRunning = false;
+bool nextDirectionClockwise = true; // true = lock, false = unlock
+unsigned long motorStart = 0;
+
+// Different motor times for lock/unlock (adjust for your mechanism)
+const unsigned long motorTimeClockwise = 250;   // ms
+const unsigned long motorTimeCounter = 190;     // ms
+unsigned long motorTime; // current motor duration
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  mfrc522.PCD_Init();
+  Serial.println("Arduino RFID toggle motor ready.");
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENA, OUTPUT);
+
+  stopMotor(); // ensure motor is stopped
+}
+
+void loop() {
+  // --- check RFID card ---
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    unsigned long now = millis();
+    if (!motorRunning && now - lastTap >= debounce) {
+      lastTap = now;
+
+      if (isAllowed(mfrc522.uid.uidByte, mfrc522.uid.size)) {
+        Serial.print("UID: ");
+        for (byte i = 0; i < mfrc522.uid.size; i++) {
+          Serial.print(mfrc522.uid.uidByte[i], HEX);
+          Serial.print(" ");
+        }
+        Serial.println();
+        Serial.println("Access granted ✅");
+
+        startMotor(nextDirectionClockwise);
+      } else {
+        Serial.println("Access denied ❌");
+      }
+    }
+    mfrc522.PICC_HaltA();
+  }
+
+  // --- stop motor after running ---
+  if (motorRunning && millis() - motorStart >= motorTime) {
+    stopMotor();
+    nextDirectionClockwise = !nextDirectionClockwise; // toggle direction for next tap
+  }
+}
+
+// ---------------- FUNCTIONS ----------------
+bool isAllowed(byte *uid, byte len) {
+  if (len != 4) return false;
+  for (byte i = 0; i < 4; i++) if (uid[i] != allowedUID[i]) return false;
+  return true;
+}
+
+void startMotor(bool clockwise) {
+  motorRunning = true;
+  motorStart = millis();
+
+  if (clockwise) {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    motorTime = motorTimeClockwise;
+    Serial.println("MOTOR CLOCKWISE (LOCK)");
+  } else {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    motorTime = motorTimeCounter;
+    Serial.println("MOTOR ANTICLOCKWISE (UNLOCK)");
+  }
+
+  analogWrite(ENA, 170); // adjust speed if needed (0-255)
+}
+
+void stopMotor() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 0);
+  motorRunning = false;
+  Serial.println("MOTOR STOPPED");
+}
